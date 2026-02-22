@@ -20,7 +20,7 @@ LDFLAGS = -m elf_i386 -T linker.ld
 all: os-image.img
 
 # -----------------------------------------------------------------------
-# Floppy image (padded to exact 1.44 MB so QEMU / and real hardware accepts it)
+# Floppy image (padded to exact 1.44 MB so QEMU / real hardware accepts it)
 # -----------------------------------------------------------------------
 os-image.img: os-image.bin
 	cp os-image.bin os-image.img
@@ -33,12 +33,17 @@ os-image.bin: boot.bin kernel.bin tomo_palette.bin tomo_pixels.bin
 	cat boot.bin kernel.bin tomo_palette.bin tomo_pixels.bin > os-image.bin
 
 # -----------------------------------------------------------------------
-# Bootloader — assembled AFTER kernel.bin exists so we know KERNEL_SECTORS
+# Bootloader — assembled AFTER kernel.bin exists so we know KERNEL_SECTORS.
+# Using shell-script style (single multi-line recipe) so the variable computed
+# in the first line is visible to the NASM command on the last line.
+# The -dKERNEL_SECTORS=N flag sets the NASM preprocessor symbol; boot.asm uses
+# %ifndef so this command-line value takes precedence over the fallback %define.
 # -----------------------------------------------------------------------
 boot.bin: boot.asm kernel.bin
-	$(eval KERNEL_SIZE    := $(shell stat -c%s kernel.bin))
-	$(eval KERNEL_SECTORS := $(shell echo $$(( ($(KERNEL_SIZE) + 511) / 512 ))))
-	$(ASM) -f bin boot.asm -o boot.bin -dKERNEL_SECTORS=$(KERNEL_SECTORS)
+	@KSIZE=$$(stat -c%s kernel.bin); \
+	KSECTORS=$$(( ($$KSIZE + 511) / 512 )); \
+	echo "  kernel.bin = $$KSIZE bytes = $$KSECTORS sectors"; \
+	$(ASM) -f bin boot.asm -o boot.bin -dKERNEL_SECTORS=$$KSECTORS
 
 # -----------------------------------------------------------------------
 # Kernel binary (loader + C++ kernel), padded to a 512-byte boundary
@@ -55,10 +60,10 @@ kernel.elf: loader.o kernel.o
 kernel.bin: kernel.elf
 	objcopy -O binary kernel.elf kernel.bin
 	@# Pad to a multiple of 512 bytes so sector counts are exact
-	$(eval KSIZE     := $(shell stat -c%s kernel.bin))
-	$(eval PAD_BYTES := $(shell echo $$(( (512 - ($(KSIZE) % 512)) % 512 ))))
-	@if [ "$(PAD_BYTES)" -gt 0 ]; then \
-	    dd if=/dev/zero bs=1 count=$(PAD_BYTES) >> kernel.bin conv=notrunc status=none; \
+	@KSIZE=$$(stat -c%s kernel.bin); \
+	PAD=$$(( (512 - ($$KSIZE % 512)) % 512 )); \
+	if [ $$PAD -gt 0 ]; then \
+	    dd if=/dev/zero bs=1 count=$$PAD >> kernel.bin conv=notrunc status=none; \
 	fi
 
 # -----------------------------------------------------------------------
