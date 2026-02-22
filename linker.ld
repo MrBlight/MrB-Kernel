@@ -1,3 +1,8 @@
+/* linker.ld
+ * Links loader.o and kernel.o into a flat binary starting at 0x1000.
+ * boot.asm jumps to 0x1000, which is the entry point of loader.asm (start).
+ */
+
 ENTRY(start)
 
 SECTIONS
@@ -9,7 +14,7 @@ SECTIONS
     }
 
     .rodata : {
-        *(.rodata)
+        *(.rodata*)
     }
 
     .data : {
@@ -18,5 +23,6 @@ SECTIONS
 
     .bss : {
         *(.bss)
+        *(COMMON)
     }
 }
