@@ -1,32 +1,121 @@
-# MyKernel0.03
+# MrB-Kernel
 
-## New features that will be in this version: 
-Curently now: After kernel loads, it will ask user to restart and boot the ***epik*** assembly image (tomo.png), or any other image, so that it gets displayed on screen
-Currently now: makfile automatically calls python program to convert the image, no need to run it yourself, make sure tomo.png is in the project folder and then you run make clean && make all
+A bare-metal x86 kernel that boots from a floppy image, switches to VGA
+Mode 13h (320 × 200, 256 colours), and displays `tomo.png` full-screen.
 
-Not currently implemented: [will go here in the future]
+---
 
-### Instructions
-Currently not working correctly
+## What was broken and what was fixed
 
-Make sure to install i686 elf tools and put it as path (once installed run this command in msys2 mingw64): export PATH="/c/i686-elf-tools/bin:$PATH"
-No need to convert os image bin file to img and pad to floppy size, makefile does this automatically
+| # | File | Bug | Fix |
+|---|------|-----|-----|
+| 1 | `kernel.cpp` | **Critical** — image was read from `0x20000` but `boot.asm` loaded it to `0x90000`. Kernel was reading garbage memory. | Changed `image_base` to `0x90000`. |
+| 2 | `boot.asm` | Boot drive number (`DL`) was overwritten before being saved, causing potential wrong-drive reads on some machines. | Save `DL` to `boot_drive` on entry; restore before every `int 0x13` call. |
+| 3 | `loader.asm` | PIC masking wrote to slave (`0xA1`) before master (`0x21`) — backwards. | Fixed order to master first, then slave. |
+| 4 | `loader.asm` | Comment note about stack "below image at 0x90000" confirmed the intent but the address mismatch in the kernel made it moot. Now consistent. | No code change needed — comment clarified. |
 
-Works with qemu so make sure it's installed in msys2 (ex run "qemu-system-i386 -fda os-image.img -boot a -vga cirrus" to boot off of it (can use std instead of cirrus))
+> **The address confusion:** `mov ax, 0x9000` in `boot.asm` is *not* the same
+> as writing to address `0x9000`.  In real-mode segmented addressing, the
+> physical address = segment register × 16, so `0x9000 × 16 = 0x90000`.
+> The comment in the original source was actually correct — only `kernel.cpp`
+> was wrong.
 
-If python code doesn't execute correctly due to pip and/or PIL not being installed in msys2 mingw64, make sure you have pip installed, run "python -c "import sys; print(sys.executable)" 
-it will give you a directory, run "<that_full_path> -m pip install --upgrade pillow", of course you need to replace the placeholder with the actual path 
+---
 
-then install pillow with "pacman -S mingw-w64-x86_64-python-pillow" and answer yes to the prompts.
-once this is done try to build the project again
+## Memory map
 
-If it still doesn't work, try running these:
+| Region | Contents |
+|--------|----------|
+| `0x0000 – 0x7BFF` | Stack (grows down from 0x7C00) |
+| `0x7C00 – 0x7DFF` | Bootloader (`boot.asm`) |
+| `0x1000 – ~0x4FFF` | Loader + kernel code |
+| `0x80000` | Kernel stack top (32-bit mode) |
+| `0x90000 – 0x9FBFF` | Image data (768 B palette + 64 000 B pixels) |
+| `0xA0000 – 0xAF9FF` | VGA framebuffer (Mode 13h) |
 
-- pacman -Syu
-- pacman -S mingw-w64-x86_64-python
-- pacman -S mingw-w64-x86_64-python-pillow
+---
 
-After that, test with:
-python -c "from PIL import Image; print('Success')"
+## Prerequisites
 
-If it prints it then all is good and you can make clean && make all
+### On Windows (MSYS2 MinGW64) — my original target environment
+
+```bash
+# One-time setup
+pacman -Syu
+pacman -S mingw-w64-x86_64-python mingw-w64-x86_64-python-pillow
+
+# Install i686-elf cross-compiler toolchain
+# Download from https://github.com/lordmilko/i686-elf-tools/releases
+# Extract to C:\i686-elf-tools, then add to PATH:
+export PATH="/c/i686-elf-tools/bin:$PATH"
+
+# Install NASM
+pacman -S mingw-w64-x86_64-nasm
+
+# Install QEMU
+pacman -S mingw-w64-x86_64-qemu
+
+# Verify Pillow works
+python3 -c "from PIL import Image; print('Pillow OK')"
+```
+
+### On Linux (Ubuntu/Debian)
+
+```bash
+sudo apt update
+sudo apt install nasm gcc-multilib binutils build-essential qemu-system-x86 python3-pillow
+
+# Cross-compiler (if apt version doesn't work, get from lordmilko link above)
+sudo apt install gcc-i686-linux-gnu binutils-i686-linux-gnu
+# Then symlink or adjust CC/LD in Makefile to i686-linux-gnu-g++ / i686-linux-gnu-ld
+```
+
+---
+
+## Building
+
+```bash
+# Place tomo.png (or your own 320×200-ish image) in the project folder, then:
+make clean && make all
+```
+
+This will:
+1. Run `convert.py tomo.png` → `tomo_palette.bin` + `tomo_pixels.bin`
+2. Compile `kernel.cpp` and assemble `loader.asm` → `kernel.bin`
+3. Assemble `boot.asm` (auto-detecting `KERNEL_SECTORS`) → `boot.bin`
+4. Concatenate everything → `os-image.bin` → padded to 1.44 MB → `os-image.img`
+
+---
+
+## Running
+
+```bash
+qemu-system-i386 -fda os-image.img -boot a
+```
+
+You can also try `-vga std` instead of the default if colours look wrong.
+
+> **QEMU tip:** Add `-display sdl` or `-display gtk` if the default window
+> refuses to appear on your system.
+
+---
+
+## Project structure
+
+```
+.
+├── boot.asm         Stage-1 bootloader (loads kernel + image, enables A20)
+├── loader.asm       Stage-2 loader (Mode 13h, GDT, protected-mode switch)
+├── kernel.cpp       C++ kernel (programs VGA palette, blits pixels)
+├── linker.ld        Linker script (places code at 0x1000)
+├── Makefile         Build system (auto-detects sector counts, pads image)
+├── convert.py       PNG → Mode-13h raw palette + pixel data
+├── tomo.png         Default image (replace with anything you like)
+└── README.md        This file
+```
+
+---
+
+## License
+
+GPL-3.0 — see `LICENSE.md`.
